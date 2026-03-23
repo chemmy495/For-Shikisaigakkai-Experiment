@@ -63,6 +63,8 @@ class ExperimentApp(tk.Tk):
         self._waiting_response = False
         self._running = False           # 試行中フラグ (UI 操作ロック用)
         self._brightness = 80           # 現在の輝度 (0-255)
+        self._serial_lock = threading.Lock()   # シリアル排他制御
+        self._brightness_after_id = None       # デバウンス用タイマーID
 
         self._build_ui()
         self._connect_arduino()
@@ -133,14 +135,15 @@ class ExperimentApp(tk.Tk):
         self._lbl_phase.pack(pady=(0, 4))
 
         self._lbl_key_hint = tk.Label(
-            mid, text="同じ色: [F]キー  |  違う色: [J]キー",
+            mid, text="同じ色: [F]キー  |  違う色: [J]キー  |  わからない: [Space]キー",
             font=("Meiryo UI", 11), bg="#181825", fg="#a6adc8"
         )
         self._lbl_key_hint.pack()
 
         # --- キーボードバインド ---
-        self.bind("<f>", lambda e: self._record_response(True))   # F = 同じ
-        self.bind("<j>", lambda e: self._record_response(False))  # J = 違う
+        self.bind("<f>",     lambda e: self._record_response(True))   # F     = 同じ
+        self.bind("<j>",     lambda e: self._record_response(False))  # J     = 違う
+        self.bind("<space>", lambda e: self._record_response(None))   # Space = わからない
 
         # --- 下部: 制御ボタン ---
         bot = tk.Frame(self, bg="#1e1e2e", pady=10)
@@ -196,8 +199,20 @@ class ExperimentApp(tk.Tk):
         self._apply_brightness(v)
 
     def _apply_brightness(self, value: int):
-        """輝度値を保存し、Arduino に非同期送信"""
+        """輝度値を保存し、150ms デバウンス後に Arduino へ非同期送信
+        スライダーを素早く動かしても最後の値だけ送られる"""
         self._brightness = value
+        # 既存の送信予約をキャンセルして再スケジュール
+        if self._brightness_after_id is not None:
+            self.after_cancel(self._brightness_after_id)
+        self._brightness_after_id = self.after(
+            150,
+            lambda v=value: self._send_brightness_now(v)
+        )
+
+    def _send_brightness_now(self, value: int):
+        """デバウンス後に実際にシリアル送信するヘルパー"""
+        self._brightness_after_id = None
         if self._serial and self._serial.is_open:
             threading.Thread(
                 target=lambda: self._send_command(f"BRIGHTNESS {value}"),
@@ -223,7 +238,7 @@ class ExperimentApp(tk.Tk):
                 self._serial = ser
                 self.after(0, self._on_connected)
             except serial.SerialException as e:
-                self.after(0, lambda: self._on_connect_failed(str(e)))
+                self.after(0, lambda e=e: self._on_connect_failed(str(e)))
 
         threading.Thread(target=_try_connect, daemon=True).start()
 
@@ -243,9 +258,14 @@ class ExperimentApp(tk.Tk):
         )
 
     def _send_command(self, cmd: str):
-        """シリアルコマンド送信 → "OK" 応答を待つ"""
-        if self._serial and self._serial.is_open:
-            self._serial.write((cmd + "\n").encode())
+        """シリアルコマンド送信 → "OK" 応答を待つ (排他ロック付き)"""
+        with self._serial_lock:
+            if not (self._serial and self._serial.is_open):
+                return
+            try:
+                self._serial.write((cmd + "\n").encode())
+            except serial.SerialException:
+                return   # 書き込み失敗は無視して続行
             deadline = time.time() + 3
             while time.time() < deadline:
                 if self._serial.in_waiting:
@@ -311,10 +331,11 @@ class ExperimentApp(tk.Tk):
         self._trial_num += 1
         self._lbl_trial.config(text=f"試行 {self._trial_num} 回目")
         self._lbl_phase.config(text="回答してください")
-        self._lbl_key_hint.config(text="同じ色: [F]キー  |  違う色: [J]キー")
+        self._lbl_key_hint.config(text="同じ色: [F]キー  |  違う色: [J]キー  |  わからない: [Space]キー")
         self._waiting_response = True
 
-    def _record_response(self, user_says_same: bool):
+    def _record_response(self, user_says_same: bool | None):
+        """user_says_same: True=同じ / False=違う / None=わからない"""
         if not self._waiting_response:
             return
         self._waiting_response = False
@@ -322,9 +343,14 @@ class ExperimentApp(tk.Tk):
         rt_ms = round((time.perf_counter() - self._response_start) * 1000)
 
         correct_same = (self._color1 == self._color2)
-        is_correct = (user_says_same == correct_same)
-        correct_ans = "同じ" if correct_same else "違う"
-        user_ans    = "同じ" if user_says_same  else "違う"
+        correct_ans  = "同じ" if correct_same else "違う"
+
+        if user_says_same is None:
+            user_ans   = "わからない"
+            is_correct = "?"          # 正誤なし
+        else:
+            user_ans   = "同じ" if user_says_same else "違う"
+            is_correct = "○" if (user_says_same == correct_same) else "×"
 
         row = {
             "trial":       self._trial_num,
@@ -332,7 +358,7 @@ class ExperimentApp(tk.Tk):
             "color2":      self._color2,
             "correct_ans": correct_ans,
             "user_ans":    user_ans,
-            "is_correct":  "○" if is_correct else "×",
+            "is_correct":  is_correct,
             "rt_ms":       rt_ms,
             "brightness":  self._brightness,
         }
