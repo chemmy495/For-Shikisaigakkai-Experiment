@@ -6,8 +6,9 @@
  * 接続: WS2812B データ線 → Arduinoピン 6
  *
  * シリアルコマンド (9600 baud):
- *   SHOW R G B  → 全LEDを指定色で点灯 (R/G/B: 0-255)
- *   OFF         → 全LED消灯
+ *   SHOW R G B       → 全LEDを指定色で点灯 (R/G/B: 0-255)
+ *   OFF              → 全LED消灯
+ *   BRIGHTNESS <val> → 輝度変更 (0-255)、即時反映
  * 応答:
  *   READY       → 起動完了
  *   OK          → コマンド実行完了
@@ -54,6 +55,15 @@ void loop() {
       b = constrain(b, 0, 255);
       fill_solid(leds, NUM_LEDS, CRGB(r, g, b));
       FastLED.show();
+      Serial.println("OK");
+
+    } else if (command.startsWith("BRIGHTNESS ")) {
+      int bri = 80;
+      // フォーマット: "BRIGHTNESS <val>"
+      sscanf(command.c_str(), "BRIGHTNESS %d", &bri);
+      bri = constrain(bri, 0, 255);
+      FastLED.setBrightness(bri);
+      FastLED.show();   // 点灯中のLEDに即時反映
       Serial.println("OK");
     }
   }

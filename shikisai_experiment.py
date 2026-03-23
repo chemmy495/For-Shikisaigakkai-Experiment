@@ -62,6 +62,7 @@ class ExperimentApp(tk.Tk):
         self._color2: str | None = None
         self._waiting_response = False
         self._running = False           # 試行中フラグ (UI 操作ロック用)
+        self._brightness = 80           # 現在の輝度 (0-255)
 
         self._build_ui()
         self._connect_arduino()
@@ -89,6 +90,37 @@ class ExperimentApp(tk.Tk):
             bg="#1e1e2e", fg="#a6adc8"
         )
         self._lbl_trial.pack()
+
+        # --- 輝度設定 ---
+        bright_frame = tk.Frame(self, bg="#1e1e2e", pady=6)
+        bright_frame.pack(fill=tk.X)
+
+        tk.Label(
+            bright_frame, text="輝度 (0–255):",
+            font=("Meiryo UI", 10), bg="#1e1e2e", fg="#cdd6f4"
+        ).pack(side=tk.LEFT, padx=(12, 4))
+
+        self._brightness_var = tk.IntVar(value=80)
+
+        self._scale_bright = tk.Scale(
+            bright_frame, from_=0, to=255, orient=tk.HORIZONTAL,
+            variable=self._brightness_var, length=200,
+            bg="#1e1e2e", fg="#cdd6f4", troughcolor="#313244",
+            activebackground="#89b4fa", highlightthickness=0,
+            showvalue=False, command=self._on_brightness_scale
+        )
+        self._scale_bright.pack(side=tk.LEFT, padx=(0, 4))
+
+        vcmd = self.register(self._validate_brightness)
+        self._entry_bright = tk.Entry(
+            bright_frame, textvariable=self._brightness_var, width=5,
+            font=("Meiryo UI", 10), bg="#313244", fg="#cdd6f4",
+            insertbackground="#cdd6f4", relief=tk.FLAT,
+            validate="key", validatecommand=(vcmd, "%P")
+        )
+        self._entry_bright.pack(side=tk.LEFT, padx=(0, 4))
+        self._entry_bright.bind("<Return>",   self._on_brightness_entry)
+        self._entry_bright.bind("<FocusOut>", self._on_brightness_entry)
 
         # --- 中央: 状態・操作案内 ---
         mid = tk.Frame(self, bg="#181825", pady=24)
@@ -133,6 +165,44 @@ class ExperimentApp(tk.Tk):
         self._btn_save.pack(side=tk.RIGHT, **pad)
 
         self.configure(bg="#181825")
+
+    # ----------------------------------------------------------
+    # 輝度コントロール
+    # ----------------------------------------------------------
+
+    def _validate_brightness(self, val: str) -> bool:
+        """Entry の入力バリデーション: 空欄 or 0–255 の整数のみ許可"""
+        if val == "":
+            return True
+        try:
+            return 0 <= int(val) <= 255
+        except ValueError:
+            return False
+
+    def _on_brightness_scale(self, val: str):
+        """Scale を動かしたとき: Entry と同期して Arduino に送信"""
+        v = int(float(val))
+        self._brightness_var.set(v)
+        self._apply_brightness(v)
+
+    def _on_brightness_entry(self, _event=None):
+        """Entry で Enter / フォーカスアウト時: 値を整形して Arduino に送信"""
+        try:
+            v = max(0, min(255, int(self._brightness_var.get())))
+        except (ValueError, tk.TclError):
+            v = self._brightness          # 無効値なら元の値に戻す
+        self._brightness_var.set(v)
+        self._scale_bright.set(v)
+        self._apply_brightness(v)
+
+    def _apply_brightness(self, value: int):
+        """輝度値を保存し、Arduino に非同期送信"""
+        self._brightness = value
+        if self._serial and self._serial.is_open:
+            threading.Thread(
+                target=lambda: self._send_command(f"BRIGHTNESS {value}"),
+                daemon=True
+            ).start()
 
     # ----------------------------------------------------------
     # Arduino 接続
@@ -194,7 +264,6 @@ class ExperimentApp(tk.Tk):
         self._running = True
         self._btn_start.config(state=tk.DISABLED)
         self._lbl_phase.config(text="準備中…")
-        self._lbl_key_hint.config(text="")
 
         threading.Thread(target=self._trial_thread, daemon=True).start()
 
@@ -260,6 +329,7 @@ class ExperimentApp(tk.Tk):
             "user_ans":    user_ans,
             "is_correct":  "○" if is_correct else "×",
             "rt_ms":       rt_ms,
+            "brightness":  self._brightness,
         }
         self._trial_data.append(row)
 
@@ -287,7 +357,8 @@ class ExperimentApp(tk.Tk):
             return  # キャンセル
 
         fieldnames = ["trial", "color1", "color2",
-                      "correct_ans", "user_ans", "is_correct", "rt_ms"]
+                      "correct_ans", "user_ans", "is_correct", "rt_ms",
+                      "brightness"]
         try:
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
