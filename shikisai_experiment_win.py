@@ -39,7 +39,7 @@ COLORS = {
     "Color_D": (255, 255,   0),   # 黄
 }
 
-COM_PORT      = "COM9"      # Arduino の接続ポート (例: "COM9" や "/dev/tty.usbmodem1101")   
+COM_PORT      = "COM9"
 BAUD_RATE     = 9600
 DISPLAY_TIME  = 2.0          # 各色の表示時間 [秒]
 BLANK_MIN     = 2.0          # 空白期間の最短 [秒]
@@ -270,9 +270,14 @@ class ExperimentApp(tk.Tk):
     def _trial_thread(self):
         color_names = list(COLORS.keys())
 
-        # ランダムに2色選択 (同色も有り得る)
-        c1_name = random.choice(color_names)
-        c2_name = random.choice(color_names)
+        # 同色試行 / 異色試行を 1/2 ずつになるよう制御
+        if random.random() < 0.5:
+            # 同色: 1色をランダムに選んで両方に使う
+            c1_name = random.choice(color_names)
+            c2_name = c1_name
+        else:
+            # 異色: 2色が必ず異なるようにサンプリング
+            c1_name, c2_name = random.sample(color_names, 2)
         self._color1 = c1_name
         self._color2 = c2_name
 
