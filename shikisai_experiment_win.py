@@ -39,7 +39,7 @@ COLORS = {
     "Color_D": (255, 255,   0),   # 黄
 }
 
-COM_PORT      = "COM9"
+COM_PORT      = "COM9"      # Arduino の接続ポート (例: "COM9" や "/dev/tty.usbmodem1101")   
 BAUD_RATE     = 9600
 DISPLAY_TIME  = 2.0          # 各色の表示時間 [秒]
 BLANK_MIN     = 2.0          # 空白期間の最短 [秒]
